@@ -1,0 +1,56 @@
+name: RTX-RDP
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 360
+
+    steps:
+    - name: Enable RDP + Disable NLA
+      run: |
+        Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name "fDenyTSConnections" -Value 0 -Force
+        Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" -Name "UserAuthentication" -Value 0 -Force
+        Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+        netsh advfirewall firewall delete rule name="RDP-Allow" > $null 2>&1
+        netsh advfirewall firewall add rule name="RDP-Allow" dir=in action=allow protocol=TCP localport=3389
+
+    - name: Enable GPU Acceleration (RTX Mode)
+      run: |
+        # Enable Hardware Rendering for RDP
+        reg add "HKLM\SOFTWARE\Microsoft\Windows NT\Terminal Server\WinStations\RDP-Tcp" /v EnableHardwareRender /t REG_DWORD /d 1 /f
+        # Enable GPU Scheduling
+        reg add "HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers" /v HwSchMode /t REG_DWORD /d 2 /f
+        # Enable Virtualized GPU (for cloud/VM)
+        reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services" /v fEnableVirtualizedGPU /t REG_DWORD /d 1 /f
+
+    - name: Optimize Windows for Gaming / Desktop
+      run: |
+        # Disable Xbox Game Bar
+        Get-AppxPackage Microsoft.XboxGamingOverlay -AllUsers | Remove-AppxPackage
+        # Disable background apps
+        reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications" /v GlobalUserDisabled /t REG_DWORD /d 1 /f
+        # Disable visual effects for performance
+        Set-ItemProperty "HKCU:\Control Panel\Desktop" UserPreferencesMask ([byte[]](0x90,0x12,0x03,0x80,0x10,0x00,0x00,0x00))
+
+    - name: Create RDP User (Random Strong Password)
+      run: |
+        Add-Type -AssemblyName System.Security
+        $Chars = ([char[]](33..126))
+        $Password = -join (1..16 | ForEach-Object { $Chars | Get-Random })
+        $Secure = ConvertTo-SecureString $Password -AsPlainText -Force
+        New-LocalUser -Name "rdpuser" -Password $Secure -AccountNeverExpires
+        Add-LocalGroupMember -Group "Administrators" -Member "rdpuser"
+        Write-Host "==============================="
+        Write-Host " USERNAME  : rdpuser"
+        Write-Host " PASSWORD  : $Password"
+        Write-Host "==============================="
+
+    - name: Output VM Public IP
+      run: |
+        $ip = (Invoke-RestMethod ifconfig.me)
+        Write-Host "==============================="
+        Write-Host " PUBLIC IP : $ip"
+        Write-Host "==============================="
